@@ -42,14 +42,16 @@ const settled = { type: "agent_settled", aborted: false } as const;
 function harness() {
   type Handler = (event: never, ctx: ExtensionContext) => unknown;
   const handlers = new Map<string, Handler[]>();
-  const notifications: { message: string; type?: string }[] = [];
+  const timeEntries: { customType: string; data: unknown }[] = [];
+  let timeRenderer: ((entry: { data?: unknown }, options: unknown, theme: {
+    fg(color: string, text: string): string;
+  }) => unknown) | undefined;
   let now = 1000;
   let date = new Date(2026, 0, 1, 13, 5, 9);
   let entries: unknown[] = [];
   const ctx = {
     hasUI: true, mode: "tui",
     sessionManager: { getEntryCount: () => entries.length, getEntries: () => entries },
-    ui: { notify: (message: string, type?: string) => { notifications.push({ message, type }); } },
   } as unknown as ExtensionContext;
   const api = {
     on(name: string, handler: Handler) {
@@ -58,10 +60,27 @@ function harness() {
       handlers.set(name, list);
       return () => {};
     },
+    appendEntry(customType: string, data: unknown) {
+      timeEntries.push({ customType, data });
+    },
+    registerEntryRenderer(_customType: string, renderer: unknown) {
+      timeRenderer = renderer as typeof timeRenderer;
+    },
   } as unknown as ExtensionAPI;
   registerTimeExtension(api, { now: () => now, date: () => date });
   return {
-    notifications, ctx,
+    timeEntries, ctx,
+    get messages() { return timeEntries.map((entry) => (entry.data as { message: string }).message); },
+    renderTimeEntry(entry: unknown) {
+      let color: string | undefined;
+      const rendered = timeRenderer?.(entry as { data?: unknown }, {}, {
+        fg(name, text) {
+          color = name;
+          return text;
+        },
+      });
+      return { color, rendered };
+    },
     advance(ms: number) { now += ms; },
     setDate(value: Date) { date = value; },
     setEntries(value: unknown[]) { entries = value; },
@@ -71,7 +90,7 @@ function harness() {
   };
 }
 
-test("notifies once at settlement, after tools, retries, and boundary continuations", async () => {
+test("records once at settlement, after tools, retries, and boundary continuations", async () => {
   const h = harness();
   await h.emit(before);
   h.advance(3000);
@@ -87,21 +106,30 @@ test("notifies once at settlement, after tools, retries, and boundary continuati
   };
   await h.emit({ type: "message_end", message: tool });
   await h.emit({ type: "agent_end", messages: [message, tool] });
-  assert.equal(h.notifications.length, 0);
+  assert.equal(h.messages.length, 0);
   h.advance(60000);
   await h.emit({ type: "agent_start" });
   await h.emit({ type: "message_end", message: assistant({ stopReason: "error" }) });
   await h.emit({ type: "agent_end", messages: [] });
   await h.emit({ type: "agent_start" });
   await h.emit({ type: "message_end", message: assistant() });
-  assert.equal(h.notifications.length, 0);
+  assert.equal(h.messages.length, 0);
   h.advance(20000);
   await h.emit(settled);
   await h.emit(settled);
-  assert.deepEqual(h.notifications, [{
-    message: "1m 23s · tools 0s · in 640 (200 cached), out 80 · $0.0400 · 01:05:09 PM",
-    type: "info",
+  assert.deepEqual(h.timeEntries, [{
+    customType: "pi-time",
+    data: { message: "1m 23s · tools 0s · in 640 (200 cached), out 80 · $0.0400 · 01:05:09 PM" },
   }]);
+  const rendered = h.renderTimeEntry({ data: { message: "timing" } });
+  assert.equal(rendered.color, "dim");
+  assert.ok(rendered.rendered);
+  assert.match((rendered.rendered as { render(width: number): string[] }).render(80)[0]!, /^ timing\s+$/);
+  assert.doesNotThrow(() => h.renderTimeEntry({ data: undefined }));
+  assert.equal(h.renderTimeEntry({ data: { message: 42 } }).rendered, undefined);
+  assert.equal(h.renderTimeEntry({ data: 42 }).rendered, undefined);
+  assert.equal(h.renderTimeEntry({ data: null }).rendered, undefined);
+  assert.equal(h.renderTimeEntry("legacy").rendered, undefined);
 });
 
 test("tool time counts serial, parallel, and nested intervals once across turns", async () => {
@@ -132,12 +160,12 @@ test("tool time counts serial, parallel, and nested intervals once across turns"
   await h.emit(toolEnd("serial"));
   h.advance(1000);
   await h.emit(settled);
-  assert.match(h.notifications[0]!.message, /^12s · tools 4s · in /);
+  assert.match(h.messages[0], /^12s · tools 4s · in /);
 
   await h.emit(before);
   h.advance(2000);
   await h.emit(settled);
-  assert.match(h.notifications[1]!.message, /^2s · tools 0s · in /);
+  assert.match(h.messages[1], /^2s · tools 0s · in /);
 });
 
 test("settlement counts unfinished tool time and clears it, including on abort", async () => {
@@ -149,14 +177,13 @@ test("settlement counts unfinished tool time and clears it, including on abort",
     h.advance(2500);
     await h.emit({ type: "agent_settled", aborted });
     await h.emit(settled);
-    assert.equal(h.notifications.length, 1);
-    assert.match(h.notifications[0]!.message, /^3s · tools 2s · in /);
-    assert.equal(h.notifications[0]!.type, aborted ? "warning" : "info");
+    assert.equal(h.messages.length, 1);
+    assert.match(h.messages[0], /^3s · tools 2s · in /);
     await h.emit(toolEnd("unfinished"));
     await h.emit(before);
     h.advance(1000);
     await h.emit(settled);
-    assert.match(h.notifications[1]!.message, /^1s · tools 0s · in /);
+    assert.match(h.messages[1], /^1s · tools 0s · in /);
   }
 });
 
@@ -169,7 +196,7 @@ test("a fresh prompt discards pending tool intervals", async () => {
   await h.emit(toolEnd("old"));
   h.advance(1000);
   await h.emit(settled);
-  assert.match(h.notifications[0]!.message, /^1s · tools 0s · in /);
+  assert.match(h.messages[0], /^1s · tools 0s · in /);
 });
 
 test("consecutive tasks reset usage, elapsed time, and completion wall clock", async () => {
@@ -184,20 +211,21 @@ test("consecutive tasks reset usage, elapsed time, and completion wall clock", a
   h.advance(2000);
   h.setDate(new Date(2026, 0, 1, 0, 0, 1));
   await h.emit(settled);
-  assert.deepEqual(h.notifications[1], {
-    message: "2s · tools 0s · in 61 (50 cached), out 20 · $0.0100 · 12:00:01 AM", type: "info",
-  });
+  assert.deepEqual(h.messages, [
+    "1m 0s · tools 0s · in 160 (50 cached), out 20 · $0.0100 · 01:05:09 PM",
+    "2s · tools 0s · in 61 (50 cached), out 20 · $0.0100 · 12:00:01 AM",
+  ]);
 });
 
-test("idle events and user messages cannot add usage or create a notification", async () => {
+test("idle events and user messages cannot add usage or create an entry", async () => {
   const h = harness();
   await h.emit({ type: "message_end", message: assistant() });
   await h.emit(settled);
-  assert.equal(h.notifications.length, 0);
+  assert.equal(h.messages.length, 0);
   await h.emit(before);
   await h.emit({ type: "message_end", message: { role: "user", content: "hi", timestamp: 0 } });
   await h.emit(settled);
-  assert.equal(h.notifications[0]?.message, "0s · tools 0s · in 0 (0 cached), out 0 · $0.0000 · 01:05:09 PM");
+  assert.equal(h.messages[0], "0s · tools 0s · in 0 (0 cached), out 0 · $0.0000 · 01:05:09 PM");
 });
 
 test("compaction usage is counted once within the active task", async () => {
@@ -215,7 +243,7 @@ test("compaction usage is counted once within the active task", async () => {
   await h.emit(event);
   await h.emit({ type: "message_end", message: assistant() });
   await h.emit(settled);
-  assert.equal(h.notifications[0]?.message, "0s · tools 0s · in 320 (100 cached), out 40 · $0.0200 · 01:05:09 PM");
+  assert.equal(h.messages[0], "0s · tools 0s · in 320 (100 cached), out 40 · $0.0200 · 01:05:09 PM");
 });
 
 test("ignores a historical compaction event when the new summary matches", async () => {
@@ -233,9 +261,7 @@ test("ignores a historical compaction event when the new summary matches", async
     compactionEntry: historical,
   });
   await h.emit(settled);
-  assert.deepEqual([...h.notifications], [{
-    message: "0s · tools 0s · in 380 (50 cached), out 20 · $0.0100 · 01:05:09 PM", type: "info",
-  }]);
+  assert.deepEqual(h.messages, ["0s · tools 0s · in 380 (50 cached), out 20 · $0.0100 · 01:05:09 PM"]);
 });
 
 test("settlement includes boundary compaction usage without a session_compact event", async () => {
@@ -246,9 +272,7 @@ test("settlement includes boundary compaction usage without a session_compact ev
     summary: "", firstKeptEntryId: "a", tokensBefore: 100, usage: usage(),
   }]);
   await h.emit(settled);
-  assert.deepEqual([...h.notifications], [{
-    message: "0s · tools 0s · in 160 (50 cached), out 20 · $0.0100 · 01:05:09 PM", type: "info",
-  }]);
+  assert.deepEqual(h.messages, ["0s · tools 0s · in 160 (50 cached), out 20 · $0.0100 · 01:05:09 PM"]);
 });
 
 test("aborted tasks report partial usage once and cannot leak into the next task", async () => {
@@ -257,11 +281,10 @@ test("aborted tasks report partial usage once and cannot leak into the next task
   await h.emit({ type: "message_end", message: assistant({ stopReason: "aborted" }) });
   h.advance(1000);
   await h.emit({ type: "agent_settled", aborted: true });
-  assert.equal(h.notifications[0]?.type, "warning");
-  assert.equal(h.notifications[0]?.message, "1s · tools 0s · in 160 (50 cached), out 20 · $0.0100 · 01:05:09 PM");
+  assert.equal(h.messages[0], "1s · tools 0s · in 160 (50 cached), out 20 · $0.0100 · 01:05:09 PM");
   await h.emit(before);
   await h.emit(settled);
-  assert.equal(h.notifications[1]?.message, "0s · tools 0s · in 0 (0 cached), out 0 · $0.0000 · 01:05:09 PM");
+  assert.equal(h.messages[1], "0s · tools 0s · in 0 (0 cached), out 0 · $0.0000 · 01:05:09 PM");
 });
 
 test("successful session changes, shutdown, reload, and tree navigation clear pending state", async () => {
@@ -279,10 +302,10 @@ test("successful session changes, shutdown, reload, and tree navigation clear pe
     h.advance(2000);
     await h.emit(event);
     await h.emit(settled);
-    assert.deepEqual([...h.notifications], [], event.type);
+    assert.deepEqual(h.messages, [], event.type);
     await h.emit(before);
     await h.emit(settled);
-    assert.equal(h.notifications[0]?.message, "0s · tools 0s · in 0 (0 cached), out 0 · $0.0000 · 01:05:09 PM");
+    assert.equal(h.messages[0], "0s · tools 0s · in 0 (0 cached), out 0 · $0.0000 · 01:05:09 PM");
   }
 });
 
@@ -294,7 +317,7 @@ test("a fresh prompt replaces a start that failed before the agent loop", async 
   await h.emit({ type: "agent_start" });
   h.advance(1000);
   await h.emit(settled);
-  assert.equal(h.notifications[0]?.message, "1s · tools 0s · in 0 (0 cached), out 0 · $0.0000 · 01:05:09 PM");
+  assert.equal(h.messages[0], "1s · tools 0s · in 0 (0 cached), out 0 · $0.0000 · 01:05:09 PM");
 });
 
 test("agent_start provides a fallback when loaded without a before_agent_start", async () => {
@@ -303,10 +326,10 @@ test("agent_start provides a fallback when loaded without a before_agent_start",
   await h.emit({ type: "message_end", message: assistant() });
   h.advance(1000);
   await h.emit(settled);
-  assert.equal(h.notifications[0]?.message, "1s · tools 0s · in 160 (50 cached), out 20 · $0.0100 · 01:05:09 PM");
+  assert.equal(h.messages[0], "1s · tools 0s · in 160 (50 cached), out 20 · $0.0100 · 01:05:09 PM");
 });
 
-test("print/JSON modes clear state silently while RPC receives notify", async () => {
+test("print/JSON modes clear state silently while RPC records the entry", async () => {
   const h = harness();
   h.ctx.hasUI = false;
   await h.emit(before);
@@ -314,15 +337,15 @@ test("print/JSON modes clear state silently while RPC receives notify", async ()
   await h.emit(settled);
   h.ctx.hasUI = true;
   await h.emit(settled);
-  assert.equal(h.notifications.length, 0);
+  assert.equal(h.messages.length, 0);
   h.ctx.mode = "rpc";
   await h.emit(before);
   await h.emit({ type: "message_end", message: assistant() });
   await h.emit(settled);
-  assert.equal(h.notifications.length, 1);
+  assert.equal(h.messages.length, 1);
 });
 
-test("Pi discovers the manifest entry point and its real loaded factory emits a notification", async () => {
+test("Pi discovers the manifest entry point and its real loaded factory", async () => {
   const root = fileURLToPath(new URL("../", import.meta.url));
   const dir = await mkdtemp(join(tmpdir(), "pi-time-load-"));
   try {
@@ -333,13 +356,7 @@ test("Pi discovers the manifest entry point and its real loaded factory emits a 
     for (const event of ["before_agent_start", "agent_start", "message_end", "tool_execution_start", "tool_execution_end", "agent_settled"]) {
       assert.equal(extension.handlers.get(event)?.length, 1, event);
     }
-    const h = harness();
-    for (const event of [before, { type: "message_end", message: assistant() }, settled]) {
-      for (const handler of extension.handlers.get(event.type) ?? []) await handler(event, h.ctx);
-    }
-    assert.equal(h.notifications.length, 1);
-    assert.match(h.notifications[0]!.message,
-      /^\d+s · tools \d+s · in 160 \(50 cached\), out 20 · \$0\.0100 · \d{2}:\d{2}:\d{2} (AM|PM)$/);
+    assert.ok(extension.entryRenderers?.has("pi-time"));
     const manifest = JSON.parse(await readFile(join(root, "package.json"), "utf8"));
     assert.deepEqual(manifest.pi.extensions, ["./extensions/time/index.ts"]);
     assert.ok(manifest.files.includes("src"));

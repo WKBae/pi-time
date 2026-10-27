@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
-  addUsage, createUsageTotals, formatCompletionTime, formatDuration, formatNotification,
+  addUsage, createUsageTotals, formatCompletionTime, formatDuration, formatSummary,
 } from "../src/timing.ts";
 
 test("duration formatting covers subsecond, minute, hour, and multiday boundaries", () => {
@@ -45,14 +45,14 @@ test("missing, negative, and nonfinite usage never produces NaN or Infinity", ()
   assert.deepEqual(totals, createUsageTotals());
 });
 
-test("notification has the exact middot-separated elapsed, usage/cost, completion layout", () => {
+test("summary has the exact middot-separated elapsed, usage/cost, completion layout", () => {
   assert.equal(
-    formatNotification(83000, 12500, { input: 1200, cached: 800, output: 90, cost: 0.0123 },
+    formatSummary(83000, 12500, { input: 1200, cached: 800, output: 90, cost: 0.0123 },
       new Date(2026, 0, 1, 13, 5, 9)),
     "1m 23s · tools 12s · in 1,200 (800 cached), out 90 · $0.0123 · 01:05:09 PM",
   );
   assert.equal(
-    formatNotification(0, 0, createUsageTotals(), new Date(2026, 0, 1)),
+    formatSummary(0, 0, createUsageTotals(), new Date(2026, 0, 1)),
     "0s · tools 0s · in 0 (0 cached), out 0 · $0.0000 · 12:00:00 AM",
   );
 });

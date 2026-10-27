@@ -1,5 +1,6 @@
 import type { CompactionEntry, ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { addUsage, createUsageTotals, formatNotification } from "./timing.ts";
+import { Text } from "@earendil-works/pi-tui";
+import { addUsage, createUsageTotals, formatSummary } from "./timing.ts";
 import type { UsageTotals } from "./timing.ts";
 
 export interface Clock {
@@ -11,6 +12,10 @@ const systemClock: Clock = {
   now: () => performance.now(),
   date: () => new Date(),
 };
+
+interface TimeStatusEntry {
+  message: string;
+}
 
 interface Run {
   startedAt: number;
@@ -31,6 +36,12 @@ function addCompaction(run: Run, entry: CompactionEntry): void {
 }
 
 export default function registerTimeExtension(pi: ExtensionAPI, clock: Clock = systemClock): void {
+  pi.registerEntryRenderer<TimeStatusEntry>("pi-time", (entry, _options, theme) => {
+    const message = entry.data?.message;
+    if (typeof message !== "string") return undefined;
+    return new Text(theme.fg("dim", message), 1, 0);
+  });
+
   let run: Run | undefined;
   const start = (ctx: ExtensionContext): Run => {
     const entries = ctx.sessionManager?.getEntries();
@@ -89,7 +100,7 @@ export default function registerTimeExtension(pi: ExtensionAPI, clock: Clock = s
     }
   });
 
-  pi.on("agent_settled", (event, ctx) => {
+  pi.on("agent_settled", (_event, ctx) => {
     const completed = run;
     reset();
     if (!completed || !ctx.hasUI) return;
@@ -101,10 +112,12 @@ export default function registerTimeExtension(pi: ExtensionAPI, clock: Clock = s
     }
     const now = clock.now();
     // Include partial tool time if settlement arrives without an end event.
-    const toolMs = completed.toolMs + (completed.toolsStartedAt === undefined ? 0 : now - completed.toolsStartedAt);
-    ctx.ui.notify(
-      formatNotification(now - completed.startedAt, toolMs, completed.totals, clock.date()),
-      event.aborted ? "warning" : "info",
+    const message = formatSummary(
+      now - completed.startedAt,
+      completed.toolMs + (completed.toolsStartedAt === undefined ? 0 : now - completed.toolsStartedAt),
+      completed.totals,
+      clock.date(),
     );
+    pi.appendEntry<TimeStatusEntry>("pi-time", { message });
   });
 }

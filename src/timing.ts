@@ -46,6 +46,6 @@ export function formatCompletionTime(date: Date): string {
 
 const tokens = new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 });
 
-export function formatNotification(elapsedMs: number, toolMs: number, totals: UsageTotals, completedAt: Date): string {
+export function formatSummary(elapsedMs: number, toolMs: number, totals: UsageTotals, completedAt: Date): string {
   return `${formatDuration(elapsedMs)} · tools ${formatDuration(toolMs)} · in ${tokens.format(totals.input)} (${tokens.format(totals.cached)} cached), out ${tokens.format(totals.output)} · $${totals.cost.toFixed(4)} · ${formatCompletionTime(completedAt)}`;
 }

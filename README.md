@@ -1,6 +1,6 @@
 # pi-time
 
-A [Pi](https://github.com/earendil-works/pi) extension that shows how long each task took, how many tokens it used, what it cost, and when it finished. After Pi finishes all work for your prompt, it shows a notification like this:
+A [Pi](https://github.com/earendil-works/pi) extension that shows how long each task took, how many tokens it used, what it cost, and when it finished. After Pi finishes all work for your prompt, it adds a dim line like this to the session:
 
 ```text
 1m 23s · tools 12s · in 1,200 (800 cached), out 90 · $0.0123 · 01:05:09 PM
@@ -33,13 +33,13 @@ pi -e npm:pi-time
 
 ## Use
 
-The extension needs no configuration. Send a prompt as usual, and the notification appears when Pi finishes.
+The extension needs no configuration. Send a prompt as usual, and the line appears when Pi finishes. It is saved in the session, so it reappears when you reopen the session.
 
-If you cancel a task, you still get a notification, shown as a warning, with the time and usage up to that point.
+If you cancel a task, you still get a line with the time and usage up to that point.
 
-Notifications appear in the interactive terminal UI and are sent to RPC clients. Print mode (`pi -p`) and JSON mode show no notification.
+The line appears in the interactive terminal UI, and RPC clients receive it as a `pi-time` custom entry. Print mode (`pi -p`) and JSON mode add no line.
 
-## Read the notification
+## Read the summary
 
 | Field | Example | Meaning |
 | --- | --- | --- |
