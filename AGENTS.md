@@ -54,7 +54,8 @@ The Pi SDK packages, including `@earendil-works/pi-tui` for the session entry re
 - **Aborted tasks** append an entry with partial totals, in the same style as completed tasks.
 - **State reset**: `session_start`, `session_shutdown`, and `session_tree` discard any run in progress. Settlement always clears the run, even when it appends no entry.
 - **UI modes**: the extension appends the `pi-time` session entry only when `ctx.hasUI` is true, which covers the TUI and RPC. Print and JSON modes clear state without writing an entry.
-- **Format**: `<elapsed> · tools <time> · in <n> (<n> cached), out <n> · $<cost> · <hh:mm:ss AM/PM>`. Numbers use en-US thousands separators, and the time is local 12-hour time.
+- **Entry data**: the entry stores `TimeEntryData` (`elapsedMs`, `toolMs`, `inputTokens`, `cachedTokens`, `outputTokens`, `cost`, and `completedAt` in epoch milliseconds), and the renderer formats it with `formatTimeEntry`. Entries from earlier releases store only a preformatted `message` string, which the renderer still displays as is.
+- **Format**: `<elapsed> · tools <time> · in <n> (<n> cached), out <n> · $<cost> · <hh:mm:ss AM/PM>`. Numbers use en-US thousands separators, and the time is local 12-hour time at render time.
 
 ## Publishing
 

@@ -13,8 +13,41 @@ const systemClock: Clock = {
   date: () => new Date(),
 };
 
-interface TimeStatusEntry {
+/** Data of a `pi-time` session entry. The summary text is composed when the entry renders. */
+export interface TimeEntryData {
+  elapsedMs: number;
+  toolMs: number;
+  inputTokens: number;
+  cachedTokens: number;
+  outputTokens: number;
+  cost: number;
+  /** Completion time in milliseconds since the Unix epoch. */
+  completedAt: number;
+}
+
+/** Data of entries from earlier releases, which stored only the formatted summary. */
+interface LegacyTimeEntryData {
   message: string;
+}
+
+const numericFields = [
+  "elapsedMs", "toolMs", "inputTokens", "cachedTokens", "outputTokens", "cost", "completedAt",
+] as const;
+
+export function formatTimeEntry(data: unknown): string | undefined {
+  if (typeof data !== "object" || data === null) return undefined;
+  const fields = data as Record<string, unknown>;
+  if (numericFields.every((field) => typeof fields[field] === "number" && Number.isFinite(fields[field]))) {
+    const entry = data as TimeEntryData;
+    const completedAt = new Date(entry.completedAt);
+    if (!Number.isNaN(completedAt.getTime())) {
+      const totals = {
+        input: entry.inputTokens, cached: entry.cachedTokens, output: entry.outputTokens, cost: entry.cost,
+      };
+      return formatSummary(entry.elapsedMs, entry.toolMs, totals, completedAt);
+    }
+  }
+  return typeof fields.message === "string" ? fields.message : undefined;
 }
 
 interface Run {
@@ -36,9 +69,9 @@ function addCompaction(run: Run, entry: CompactionEntry): void {
 }
 
 export default function registerTimeExtension(pi: ExtensionAPI, clock: Clock = systemClock): void {
-  pi.registerEntryRenderer<TimeStatusEntry>("pi-time", (entry, _options, theme) => {
-    const message = entry.data?.message;
-    if (typeof message !== "string") return undefined;
+  pi.registerEntryRenderer<TimeEntryData | LegacyTimeEntryData>("pi-time", (entry, _options, theme) => {
+    const message = formatTimeEntry(entry.data);
+    if (message === undefined) return undefined;
     return new Text(theme.fg("dim", message), 1, 0);
   });
 
@@ -112,12 +145,14 @@ export default function registerTimeExtension(pi: ExtensionAPI, clock: Clock = s
     }
     const now = clock.now();
     // Include partial tool time if settlement arrives without an end event.
-    const message = formatSummary(
-      now - completed.startedAt,
-      completed.toolMs + (completed.toolsStartedAt === undefined ? 0 : now - completed.toolsStartedAt),
-      completed.totals,
-      clock.date(),
-    );
-    pi.appendEntry<TimeStatusEntry>("pi-time", { message });
+    pi.appendEntry<TimeEntryData>("pi-time", {
+      elapsedMs: now - completed.startedAt,
+      toolMs: completed.toolMs + (completed.toolsStartedAt === undefined ? 0 : now - completed.toolsStartedAt),
+      inputTokens: completed.totals.input,
+      cachedTokens: completed.totals.cached,
+      outputTokens: completed.totals.output,
+      cost: completed.totals.cost,
+      completedAt: clock.date().getTime(),
+    });
   });
 }

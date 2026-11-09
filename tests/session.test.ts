@@ -12,7 +12,7 @@ import {
   type AgentSessionEvent, type CustomEntry, type EventBus, type Extension, type ExtensionAPI, type ExtensionError,
   type ExtensionFactory, type ExtensionRuntime, type ExtensionUIContext, type ResourceLoader,
 } from "@earendil-works/pi-coding-agent";
-import registerTimeExtension from "../src/index.ts";
+import registerTimeExtension, { formatTimeEntry, type TimeEntryData } from "../src/index.ts";
 
 // Pi 1.3.0 exports the runtime but keeps its inline factory loader internal.
 const { loadExtensionFromFactory } = await import(new URL(
@@ -130,8 +130,8 @@ async function harness(
   });
   t.after(() => session.dispose());
   const messages = () => session.sessionManager.getEntries().filter(
-    (entry): entry is CustomEntry<{ message: string }> => entry.type === "custom" && entry.customType === "pi-time",
-  ).map((entry) => entry.data!.message);
+    (entry): entry is CustomEntry<TimeEntryData> => entry.type === "custom" && entry.customType === "pi-time",
+  ).map((entry) => formatTimeEntry(entry.data));
   session.subscribe((event) => {
     events.push(event);
     if (event.type === "agent_end") assert.deepEqual(messages(), [], "Recorded before settlement");
@@ -173,9 +173,12 @@ test("AgentSession retries a transient failure and records once with both attemp
   assert.ok(sessionFile);
   const reloaded = SessionManager.open(sessionFile);
   const reloadedEntry = reloaded.getEntries().find(
-    (entry): entry is CustomEntry<{ message: string }> => entry.type === "custom" && entry.customType === "pi-time",
+    (entry): entry is CustomEntry<TimeEntryData> => entry.type === "custom" && entry.customType === "pi-time",
   );
-  assert.deepEqual(reloadedEntry?.data, { message: h.messages()[0] });
+  assert.deepEqual(reloadedEntry?.data, {
+    elapsedMs: 3000, toolMs: 0, inputTokens: 320, cachedTokens: 100, outputTokens: 40, cost: 0.02,
+    completedAt: new Date(2026, 0, 1, 13, 5, 9).getTime(),
+  });
   const renderer = h.extension.entryRenderers?.get("pi-time");
   assert.ok(renderer);
   const rendered = renderer(reloadedEntry!, { expanded: false }, {

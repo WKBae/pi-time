@@ -10,7 +10,7 @@ import {
   type ExtensionAPI, type ExtensionContext, type ExtensionEvent,
   type BeforeAgentStartEvent, type SessionCompactEvent,
 } from "@earendil-works/pi-coding-agent";
-import registerTimeExtension from "../src/index.ts";
+import registerTimeExtension, { formatTimeEntry } from "../src/index.ts";
 
 function usage(overrides: Partial<Usage> = {}): Usage {
   return {
@@ -70,7 +70,7 @@ function harness() {
   registerTimeExtension(api, { now: () => now, date: () => date });
   return {
     timeEntries, ctx,
-    get messages() { return timeEntries.map((entry) => (entry.data as { message: string }).message); },
+    get messages() { return timeEntries.map((entry) => formatTimeEntry(entry.data)!); },
     renderTimeEntry(entry: unknown) {
       let color: string | undefined;
       const rendered = timeRenderer?.(entry as { data?: unknown }, {}, {
@@ -119,12 +119,21 @@ test("records once at settlement, after tools, retries, and boundary continuatio
   await h.emit(settled);
   assert.deepEqual(h.timeEntries, [{
     customType: "pi-time",
-    data: { message: "1m 23s · tools 0s · in 640 (200 cached), out 80 · $0.0400 · 01:05:09 PM" },
+    data: {
+      elapsedMs: 83000, toolMs: 0, inputTokens: 640, cachedTokens: 200, outputTokens: 80, cost: 0.04,
+      completedAt: new Date(2026, 0, 1, 13, 5, 9).getTime(),
+    },
   }]);
-  const rendered = h.renderTimeEntry({ data: { message: "timing" } });
-  assert.equal(rendered.color, "dim");
-  assert.ok(rendered.rendered);
-  assert.match((rendered.rendered as { render(width: number): string[] }).render(80)[0]!, /^ timing\s+$/);
+  const line = (entry: unknown) => {
+    const rendered = h.renderTimeEntry(entry);
+    assert.equal(rendered.color, "dim");
+    assert.ok(rendered.rendered);
+    return (rendered.rendered as { render(width: number): string[] }).render(120)[0]!.trimEnd();
+  };
+  assert.equal(line(h.timeEntries[0]), " 1m 23s · tools 0s · in 640 (200 cached), out 80 · $0.0400 · 01:05:09 PM");
+  assert.equal(line({ data: { message: "timing" } }), " timing");
+  assert.equal(line({ data: { ...h.timeEntries[0]!.data as object, cost: null, message: "legacy" } }), " legacy");
+  assert.equal(h.renderTimeEntry({ data: { ...h.timeEntries[0]!.data as object, completedAt: 1e20 } }).rendered, undefined);
   assert.doesNotThrow(() => h.renderTimeEntry({ data: undefined }));
   assert.equal(h.renderTimeEntry({ data: { message: 42 } }).rendered, undefined);
   assert.equal(h.renderTimeEntry({ data: 42 }).rendered, undefined);
